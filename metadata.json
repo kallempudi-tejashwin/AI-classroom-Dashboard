@@ -1,0 +1,5 @@
+{
+  "name": "AI Classroom Dashboard",
+  "description": "A vibrant, AI-powered classroom dashboard with role-based interfaces for administrators, teachers, and students. Features include user management, leave requests, AI insights, and content management in a beautiful, modern UI.",
+  "requestFramePermissions": []
+}
