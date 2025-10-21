@@ -52,6 +52,10 @@ const App: React.FC = () => {
       try {
         // Fetch all users from the database
         const response = await fetch('/.netlify/functions/get-users');
+        if (!response.ok) {
+          // This will catch HTTP errors like 404 or 500
+          throw new Error(`Failed to fetch users: ${response.status} ${response.statusText}`);
+        }
         const usersData = await response.json();
         updateState({ users: usersData });
       } catch (err) {
