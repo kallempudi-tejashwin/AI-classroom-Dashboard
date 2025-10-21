@@ -50,9 +50,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
-        // This will call your new get-students.js function
-        // For a full app, you'd have a get-users.js to get all user types
-        const response = await fetch('/.netlify/functions/get-students');
+        // Fetch all users from the database
+        const response = await fetch('/.netlify/functions/get-users');
         const usersData = await response.json();
         updateState({ users: usersData });
       } catch (err) {
@@ -143,13 +142,13 @@ const App: React.FC = () => {
       // The newStudentData from the form is already a complete User object
       // We just need to ensure it's sent to the backend.
 
-      const response = await fetch('/.netlify/functions/add-student', {
+      const response = await fetch('/.netlify/functions/add-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newStudentData),
       });
       if (!response.ok) {
-        throw new Error('Failed to add student');
+        throw new Error('Failed to add user');
       }
       const result = await response.json();
       // Add the new student to the local state to update the UI instantly
@@ -159,7 +158,7 @@ const App: React.FC = () => {
       const newStudentWithId: User = { ...newStudentData, id: result.insertedId };
       updateState({ users: [...users, newStudentWithId] });
     } catch (err) {
-      console.error("Error registering student:", err);
+      console.error("Error registering user:", err);
       // Optionally, set an error message to show in the UI
     }
   };
@@ -180,11 +179,25 @@ const App: React.FC = () => {
     updateState({ leaveRequests: updatedRequests });
   };
 
-  const handleUpdateUser = (updatedUser: User) => {
-    const updatedUsers = users.map(u => u.id === updatedUser.id ? updatedUser : u);
-    updateState({ users: updatedUsers });
-    if (currentUser && currentUser.id === updatedUser.id) {
-      setCurrentUser(updatedUser);
+  const handleUpdateUser = async (updatedUser: User) => {
+    try {
+      // Optimistically update the local state for a responsive UI
+      const updatedUsers = users.map(u => u.id === updatedUser.id ? updatedUser : u);
+      updateState({ users: updatedUsers });
+      if (currentUser && currentUser.id === updatedUser.id) {
+        setCurrentUser(updatedUser);
+      }
+
+      // Send the update to the backend API
+      await fetch('/.netlify/functions/update-user', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        // The backend expects the user's ID and the fields to update
+        body: JSON.stringify({ userId: updatedUser.id, updates: updatedUser }),
+      });
+    } catch (err) {
+      console.error("Error updating user:", err);
+      // Here you could add logic to revert the optimistic update if the API call fails
     }
   };
 
