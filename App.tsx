@@ -5,14 +5,10 @@ import DashboardPage from './pages/DashboardPage';
 import DeveloperDashboardPage from './pages/DeveloperDashboardPage';
 import SplashScreen from './components/SplashScreen';
 import FluidBackground from './components/FluidBackground';
-import { User, LeaveRequest, Announcement, ClassFile, Grade, CommunicationLog, UserRole } from './types';
-import { MOCK_USERS, MOCK_ANNOUNCEMENTS, MOCK_GRADES, MOCK_SEED_DATA } from './data/mock';
-
-const APP_DATA_VERSION = "1.1.0"; // Increment this to force a reset on data structure change
-const LOCALSTORAGE_KEY = 'classroom_dashboard_data';
+import { User, LeaveRequest, Announcement, ClassFile, Grade, CommunicationLog, UserRole, Student } from './types';
+import { MOCK_ANNOUNCEMENTS, MOCK_GRADES, MOCK_SEED_DATA } from './data/mock';
 
 interface AppState {
-  version: string;
   users: User[];
   leaveRequests: LeaveRequest[];
   announcements: Announcement[];
@@ -23,9 +19,8 @@ interface AppState {
 }
 
 const getInitialState = (): AppState => {
-  const initialState: AppState = {
-    version: APP_DATA_VERSION,
-    users: MOCK_USERS,
+  return {
+    users: [], // We will fetch this from the database
     leaveRequests: [],
     announcements: MOCK_ANNOUNCEMENTS,
     classFiles: [],
@@ -33,72 +28,12 @@ const getInitialState = (): AppState => {
     communicationLogs: [],
     theme: 'light'
   };
-  return initialState;
-};
-
-const handleExportUserData = (userId: string, appState: AppState) => {
-    const { users, grades, leaveRequests, communicationLogs, announcements, classFiles } = appState;
-    const userToExport = users.find(u => u.id === userId);
-    if (!userToExport) {
-        alert("User not found.");
-        return;
-    }
-
-    let usersToInclude: User[] = [userToExport];
-    let userIdsToInclude: Set<string> = new Set([userId]);
-
-    // If the user is an admin, find all their dependents
-    if (userToExport.role === UserRole.Administrator) {
-        const dependents = users.filter(u => u.adminId === userId);
-        usersToInclude = [...usersToInclude, ...dependents];
-        dependents.forEach(d => userIdsToInclude.add(d.id));
-    }
-
-    const scopedData = {
-        exportedBy: 'Developer',
-        exportDate: new Date().toISOString(),
-        users: usersToInclude,
-        grades: grades.filter(g => userIdsToInclude.has(g.studentId)),
-        leaveRequests: leaveRequests.filter(r => userIdsToInclude.has(r.user.id)),
-        communicationLogs: communicationLogs.filter(l => userIdsToInclude.has(l.studentId) || userIdsToInclude.has(l.teacherId)),
-        announcements: announcements.filter(a => userIdsToInclude.has(a.authorId)),
-        classFiles: classFiles, // Class files are not user-specific in the current model
-    };
-    
-    const jsonString = JSON.stringify(scopedData, null, 2);
-    const blob = new Blob([jsonString], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `user_data_${userId}_${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
 };
 
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [appState, setAppState] = useState<AppState>(() => {
-    try {
-      const savedStateJSON = localStorage.getItem(LOCALSTORAGE_KEY);
-      if (savedStateJSON) {
-        const savedState = JSON.parse(savedStateJSON, (key, value) => {
-           if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/.test(value)) {
-                return new Date(value);
-            }
-            return value;
-        });
-        
-        if (savedState.version === APP_DATA_VERSION) {
-            return savedState;
-        }
-      }
-    } catch (error) {
-      console.error("Failed to load state from localStorage, resetting.", error);
-    }
-    // If anything fails or version mismatch, return initial state
-    return getInitialState();
-  });
+  const [appState, setAppState] = useState<AppState>(getInitialState);
 
   const [error, setError] = useState<string>('');
   const [showSplash, setShowSplash] = useState(true);
@@ -111,6 +46,21 @@ const App: React.FC = () => {
     setAppState(prevState => ({ ...prevState, ...updates }));
   };
 
+  // --- Fetch initial data from the database ---
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        // This will call your new get-students.js function
+        // For a full app, you'd have a get-users.js to get all user types
+        const response = await fetch('/.netlify/functions/get-students');
+        const usersData = await response.json();
+        updateState({ users: usersData });
+      } catch (err) {
+        console.error("Failed to fetch users:", err);
+      }
+    };
+    fetchUsers();
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -134,16 +84,6 @@ const App: React.FC = () => {
     }
   }, []); // Run only once on mount
 
-  // --- Effect to save entire state to localStorage on change ---
-  useEffect(() => {
-    try {
-      const stateToSave = JSON.stringify(appState);
-      localStorage.setItem(LOCALSTORAGE_KEY, stateToSave);
-    } catch (error) {
-      console.error("Failed to save state to localStorage", error);
-    }
-  }, [appState]);
-
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -151,7 +91,6 @@ const App: React.FC = () => {
     } else {
       root.classList.remove('dark');
     }
-    // The main state effect already handles saving the theme
   }, [theme]);
 
   const handleLogin = useCallback((id: string, role: string, password: string) => {
@@ -199,8 +138,30 @@ const App: React.FC = () => {
     updateState({ users: [...users, { ...newTeacher, status: 'Active' }] });
   };
 
-  const handleRegisterStudent = (newStudent: User) => {
-    updateState({ users: [...users, { ...newStudent, status: 'Active' }] });
+  const handleRegisterStudent = async (newStudentData: User) => {
+    try {
+      // The newStudentData from the form is already a complete User object
+      // We just need to ensure it's sent to the backend.
+
+      const response = await fetch('/.netlify/functions/add-student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newStudentData),
+      });
+      if (!response.ok) {
+        throw new Error('Failed to add student');
+      }
+      const result = await response.json();
+      // Add the new student to the local state to update the UI instantly
+      // The backend returns an `insertedId`, but our frontend already has the full object.
+      // For consistency, we'll use the object we sent, ensuring the `_id` from MongoDB
+      // doesn't cause issues if we were to use it directly.
+      const newStudentWithId: User = { ...newStudentData, id: result.insertedId };
+      updateState({ users: [...users, newStudentWithId] });
+    } catch (err) {
+      console.error("Error registering student:", err);
+      // Optionally, set an error message to show in the UI
+    }
   };
   
   const handleBulkRegisterStudents = (newStudents: User[]) => {
@@ -291,7 +252,7 @@ const App: React.FC = () => {
 
   // --- New Data Management Handlers ---
   const handleFactoryReset = () => {
-    localStorage.removeItem(LOCALSTORAGE_KEY);
+    // This would now be a server-side operation to clear collections
     setAppState(getInitialState());
   };
 
@@ -312,7 +273,7 @@ const App: React.FC = () => {
     });
   };
 
-  const handleImportData = (importedState: Partial<AppState>) => {
+  const handleImportData = (importedState: Partial<AppState> & { version?: string }) => {
     // Basic validation
     if (!importedState.users || !importedState.version) {
         throw new Error("Invalid import file format.");
@@ -344,8 +305,6 @@ const App: React.FC = () => {
                     onUpdateUser={handleUpdateUser}
                     onDeleteUsers={handleDeleteUsers}
                     onImportData={handleImportData}
-                    getAppStateForExport={getAppStateForExport}
-                    onExportUserData={(userId) => handleExportUserData(userId, appState)}
                 />
             );
       }
@@ -368,9 +327,8 @@ const App: React.FC = () => {
             onDeleteAnnouncement={handleDeleteAnnouncement}
             classFiles={classFiles}
             onAddFile={handleAddFile}
-            grades={grades}
-            onAddGrade={handleAddGrade}
-            // Fix: Corrected typo from onUpdateGrade to handleUpdateGrade.
+            grades={grades} // Fix: Corrected typo from onUpdateGrade to handleUpdateGrade.
+            onAddGrade={handleAddGrade} // Fix: Corrected typo from onUpdateGrade to handleUpdateGrade.
             onUpdateGrade={handleUpdateGrade}
             onDeleteGrade={handleDeleteGrade}
             theme={theme}

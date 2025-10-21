@@ -50,6 +50,11 @@ export interface User {
   penNo?: string;
 }
 
+// A more specific type for Students
+export type Student = User & {
+  role: UserRole.Student;
+};
+
 export interface Tab {
   id: TabId;
   label: string;
